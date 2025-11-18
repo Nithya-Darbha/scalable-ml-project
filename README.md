@@ -1,6 +1,6 @@
 # Air Quality Prediction Lab – Scalable ML Systems
 
-This repository contains my solution to the Air Quality tutorial lab for the Scalable Machine Learning and Deep Learning Models (ID2223) course. We have built a serverless model that
+This repository contains our solution to the Air Quality tutorial lab for the Scalable Machine Learning and Deep Learning Models (ID2223) course. We have built a serverless model that
 
 - Backfills historical air quality and weather data into Hopsworks
 - Schedules a daily feature pipeline through GitHub Actions that updates Feature Groups
