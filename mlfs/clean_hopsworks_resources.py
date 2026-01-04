@@ -1,166 +1,194 @@
+import argparse
 import hopsworks
-import sys
 
-files_to_clean=""
-if len(sys.argv) != 2:
-    print("Usage: <prog> project_to_clean (e.g., cc or aq or titanic)")
-    sys.exit(1)
 
-files_to_clean = sys.argv[1]
-
-print(f"Cleaning project: {files_to_clean}")
-
-project = hopsworks.login(engine="python") 
-
-# Get feature store, deployment registry, model registry
-fs = project.get_feature_store()
-ms = project.get_model_serving()
-mr = project.get_model_registry()
-kafka_api = project.get_kafka_api()
-
-def delete_deployment(deployment_name):
+def delete_model_versions(mr, model_name: str, dry_run: bool):
     try:
-        deployment = ms.get_deployment(name=deployment_name)
-        print(f"Deleting deployment: {deployment.name}")
-        deployment.stop()
-        try:
-            deployment.delete()
-        except Exception:
-            print(f"Problem deleting deployment: {deployment_name}.")
+        models = mr.get_models(name=model_name)  # all versions for this name
     except Exception:
-        print("No deployments to delete.")
+        return
 
-def delete_model(model_name):
-    try:
-        models = mr.get_models(name=model_name)
-        for model in models:
-            print(f"Deleting model: {model.name} (version: {model.version})")
+    for m in models:
+        print(f"  - Model: {m.name} v{m.version}")
+        if not dry_run:
             try:
-                model.delete()
-            except Exception:
-                print(f"Failed to delete model {model_name}.")
+                m.delete()
+            except Exception as e:
+                print(f"    ! Failed deleting model {m.name} v{m.version}: {e}")
+
+
+def delete_feature_view_versions(fs, fv_name: str, dry_run: bool):
+    try:
+        fvs = fs.get_feature_views(name=fv_name)  # all versions for this name
     except Exception:
-        print("No  models to delete.")
+        return
 
-def delete_feature_view(feature_view):
-    # Get all feature views
+    for fv in fvs:
+        print(f"  - Feature view: {fv.name} v{fv.version}")
+        if not dry_run:
+            try:
+                fv.delete()
+            except Exception as e:
+                print(f"    ! Failed deleting feature view {fv.name} v{fv.version}: {e}")
+
+
+def delete_feature_group_versions(fs, fg_name: str, dry_run: bool):
     try:
-        feature_views = fs.get_feature_views(name=feature_view)
-    except:
-        print(f"Couldn't find feature view: {feature_view}. Skipping...")
-        feature_views = []
+        fgs = fs.get_feature_groups(name=fg_name)  # all versions for this name
+    except Exception:
+        return
 
-    # Delete each feature view
-    for fv in feature_views:
-        print(f"Deleting feature view: {fv.name} (version: {fv.version})")
+    for fg in fgs:
+        print(f"  - Feature group: {fg.name} v{fg.version}")
+        if not dry_run:
+            try:
+                fg.delete()
+            except Exception as e:
+                print(f"    ! Failed deleting feature group {fg.name} v{fg.version}: {e}")
+
+
+def delete_deployment_if_exists(ms, deployment_name: str, dry_run: bool):
+    try:
+        dep = ms.get_deployment(name=deployment_name)
+    except Exception:
+        return
+
+    print(f"  - Deployment: {dep.name}")
+    if not dry_run:
         try:
-            fv.delete()
+            dep.stop()
         except Exception:
-            print(f"Failed to delete feature view {fv.name}.")
-
-def delete_feature_group(feature_group):
-    # Get all feature groups
-    try:
-        feature_groups = fs.get_feature_groups(name=feature_group)
-    except:
-        print(f"Couldn't find feature group: {feature_group}. Skipping...")
-        feature_groups = []
-
-    # Delete each feature group
-    for fg in feature_groups:
-        print(f"Deleting feature group: {fg.name} (version: {fg.version})")
+            pass
         try:
-            fg.delete()
-        except:
-            print(f"Failed to delete feature group {fv.name}.")
-
-    try:
-        kafka_topics = kafka_api.get_topics()
-        for topic in kafka_topics:
-            if topic.name == feature_group:
-                topic.delete()
-                print(f"Deleting kafka topic {feature_group}")
-    except:
-        print(f"Couldn't find any kafka topics. Skipping...")
-
-    try:
-        schema = kafka_api.get_schema(feature_group, 1)
-        if schema is not None:
-            schema.delete()
-    except:
-        print(f"Couldn't find kafka schema: {feature_group}. Skipping...")
+            dep.delete()
+        except Exception as e:
+            print(f"    ! Failed deleting deployment {dep.name}: {e}")
 
 
-if files_to_clean == "cc":
-
-    # Delete all deployments
-    for deployment_name in [
-        "",
-    ]:
-        delete_deployment(deployment_name)
-    # List all models
-    for model_name in [
-        "",
-    ]:
-        delete_model(model_name)
-    
-    
-    for feature_view in [
-        "",
-    ]:
-        delete_feature_view(feature_view)
-    
-    for feature_group in [
-        "account_details",
-        "bank_details",
-        "merchant_details",
-        "credit_card_transactions",
-        "card_details",
-        "cc_fraud",
-        "cc_trans_aggs_fg",
-        "cc_trans_fg",
-        "merchant_fg",
-        "account_fg",
-        "bank_fg",
-        "cc_trans_aggs_fg"
-    ]:
-        delete_feature_group(feature_group)
-
-    KAFKA_TOPIC_NAME = f"{project.name}_real_time_live_transactions"
-    SCHEMA_NAME = "live_transactions_schema"
-    try:
-        kafka_topics = kafka_api.get_topics()
-        for topic in kafka_topics:
-            if topic.name == KAFKA_TOPIC_NAME:
-                topic.delete()
-    except:
-        print(f"Couldn't find kafka topic: {KAFKA_TOPIC_NAME}. Skipping...")
-
-    try:
-        schema = kafka_api.get_schema(SCHEMA_NAME, 1)
-        if schema is not None:
-            schema.delete()
-            print(f"Deleted kafka schema {SCHEMA_NAME}")
-    except:
-        print(f"Couldn't find kafka schema: {SCHEMA_NAME}. Skipping...")
+def try_list_all_names(obj, list_method_candidates):
+    """
+    Best-effort: Hopsworks API differs by version. We try a few method names.
+    Returns list of objects or [].
+    """
+    for m in list_method_candidates:
+        if hasattr(obj, m):
+            try:
+                res = getattr(obj, m)()
+                return res if res is not None else []
+            except Exception:
+                continue
+    return []
 
 
-elif files_to_clean == "aq":
-    delete_model("air_quality_xgboost_model")    
-    delete_feature_view("air_quality_fv")
-    for feature_group in [
-        "air_quality",
-        "weather",
-        "air_quality_fv_1_logging_transformed",
-        "air_quality_fv_1_logging_untransformed",
-        "aq_predictions"
-    ]:
-        delete_feature_group(feature_group)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--prefix",
+        default="mcphases_",
+        help="Delete only resources whose names start with this prefix (default: mcphases_).",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be deleted, but do not delete anything.",
+    )
+    ap.add_argument(
+        "--delete-kafka",
+        action="store_true",
+        help="Also delete Kafka topics that start with the prefix (ONLY if you used online feature groups).",
+    )
+    args = ap.parse_args()
 
-elif files_to_clean == "titanic":
-    delete_model("titanic")
-    delete_feature_view("titanic")
-    delete_feature_group("titanic")
+    prefix = args.prefix
+    dry_run = args.dry_run
 
-else:
-    print(f"Couldn't find target to clean files for: {files_to_clean}. Valid options include 'cc', 'aq', and 'titanic'")
+    print(f"Cleaning Hopsworks resources with prefix: '{prefix}' (dry_run={dry_run})")
+
+    project = hopsworks.login(engine="python")
+    fs = project.get_feature_store()
+    mr = project.get_model_registry()
+    ms = project.get_model_serving()
+    kafka_api = project.get_kafka_api()
+
+    # 1) Collect candidate names (best-effort listing)
+    # Some Hopsworks versions allow listing all; if not, we fall back to “known names” below.
+    all_fgs = try_list_all_names(fs, ["get_feature_groups"])
+    all_fvs = try_list_all_names(fs, ["get_feature_views"])
+    all_models = try_list_all_names(mr, ["get_models"])
+    all_deps = try_list_all_names(ms, ["get_deployments"])
+
+    fg_names = sorted({fg.name for fg in all_fgs if getattr(fg, "name", "").startswith(prefix)})
+    fv_names = sorted({fv.name for fv in all_fvs if getattr(fv, "name", "").startswith(prefix)})
+    model_names = sorted({m.name for m in all_models if getattr(m, "name", "").startswith(prefix)})
+    dep_names = sorted({d.name for d in all_deps if getattr(d, "name", "").startswith(prefix)})
+
+    # Fallback if listing isn’t supported (very common):
+    # Put your actual names here once you create them.
+    # This makes the script still usable even if list APIs aren’t available.
+    if not fg_names and not fv_names and not model_names and not dep_names:
+        print("Could not list resources via API. Using fallback known-name patterns.")
+        # Add to these as you create them in your project:
+        fg_names = [
+            "mcphases_daily_fg",
+            "mcphases_predictions_fg",
+        ]
+        fv_names = [
+            "mcphases_daily_fv",
+        ]
+        model_names = [
+            "mcphases_mood_today_extratrees",
+            "mcphases_fatigue_today_extratrees",
+            "mcphases_mood_tomorrow_extratrees",
+            "mcphases_fatigue_tomorrow_extratrees",
+        ]
+        dep_names = []  # only if you actually deployed something
+
+    print("\nPlanned deletions (in safe order):")
+    print("Deployments:", dep_names or "none")
+    print("Models:", model_names or "none")
+    print("Feature views:", fv_names or "none")
+    print("Feature groups:", fg_names or "none")
+
+    # 2) Delete in safe dependency order:
+    # deployments -> models -> feature views -> feature groups
+    if dep_names:
+        print("\nDeleting deployments...")
+        for name in dep_names:
+            delete_deployment_if_exists(ms, name, dry_run)
+
+    if model_names:
+        print("\nDeleting models (all versions)...")
+        for name in model_names:
+            delete_model_versions(mr, name, dry_run)
+
+    if fv_names:
+        print("\nDeleting feature views (all versions)...")
+        for name in fv_names:
+            delete_feature_view_versions(fs, name, dry_run)
+
+    if fg_names:
+        print("\nDeleting feature groups (all versions)...")
+        for name in fg_names:
+            delete_feature_group_versions(fs, name, dry_run)
+
+    # 3) Optional Kafka cleanup (ONLY if you used online feature groups / Kafka topics)
+    if args.delete_kafka:
+        print("\nDeleting Kafka topics (prefix match)...")
+        try:
+            topics = kafka_api.get_topics()
+            for t in topics:
+                if t.name.startswith(prefix):
+                    print(f"  - Kafka topic: {t.name}")
+                    if not dry_run:
+                        try:
+                            t.delete()
+                        except Exception as e:
+                            print(f"    ! Failed deleting Kafka topic {t.name}: {e}")
+        except Exception as e:
+            print(f"Kafka cleanup skipped (could not list topics): {e}")
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
